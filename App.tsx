@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ConversionMode, HistoryItem } from './types';
-import { convertText, textToSpeech } from './services/geminiService';
+import { ConversionMode, HistoryItem } from './types.ts';
+import { convertText, textToSpeech } from './services/geminiService.ts';
 
 // Audio decoding utilities
 function decodeBase64(base64: string) {
@@ -108,7 +108,6 @@ const App: React.FC = () => {
   const handleSpeak = async () => {
     if (!outputText.trim() || audioLoading) return;
     
-    // Stop previous audio if playing
     if (audioSourceRef.current) {
       audioSourceRef.current.stop();
     }
