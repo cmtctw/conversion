@@ -1,5 +1,5 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import { ConversionMode, ConversionResult } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
@@ -24,7 +24,7 @@ export const convertText = async (
       contents: text,
       config: {
         systemInstruction: SYSTEM_PROMPTS[mode],
-        temperature: 0.2, // Lower temperature for more deterministic conversion
+        temperature: 0.2,
       },
     });
 
@@ -34,5 +34,31 @@ export const convertText = async (
   } catch (error) {
     console.error("Gemini Error:", error);
     throw new Error("API 請求出錯，請檢查網絡或 API Key。");
+  }
+};
+
+export const textToSpeech = async (text: string): Promise<string> => {
+  if (!text.trim()) return "";
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text: `Read this text clearly in Chinese: ${text}` }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: 'Kore' }, // Neutral high-quality voice
+          },
+        },
+      },
+    });
+
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!base64Audio) throw new Error("未能生成語音數據");
+    return base64Audio;
+  } catch (error) {
+    console.error("TTS Error:", error);
+    throw new Error("語音合成失敗，請稍後再試。");
   }
 };

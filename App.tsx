@@ -1,9 +1,38 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ConversionMode, HistoryItem } from './types';
-import { convertText } from './services/geminiService';
+import { convertText, textToSpeech } from './services/geminiService';
 
-// Helper components
+// Audio decoding utilities
+function decodeBase64(base64: string) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function decodeAudioData(
+  data: Uint8Array,
+  ctx: AudioContext,
+  sampleRate: number,
+  numChannels: number,
+): Promise<AudioBuffer> {
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length / numChannels;
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+  for (let channel = 0; channel < numChannels; channel++) {
+    const channelData = buffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+    }
+  }
+  return buffer;
+}
+
 const NavItem: React.FC<{ 
   active: boolean; 
   onClick: () => void; 
@@ -26,9 +55,13 @@ const App: React.FC = () => {
   const [outputText, setOutputText] = useState('');
   const [mode, setMode] = useState<ConversionMode>('T2S');
   const [loading, setLoading] = useState(false);
+  const [audioLoading, setAudioLoading] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [copyStatus, setCopyStatus] = useState<{id: string, text: string} | null>(null);
   const [showGuide, setShowGuide] = useState(false);
+  
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('hanziflow_history');
@@ -39,6 +72,11 @@ const App: React.FC = () => {
         console.error("Failed to parse history", e);
       }
     }
+    return () => {
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -67,6 +105,36 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSpeak = async () => {
+    if (!outputText.trim() || audioLoading) return;
+    
+    // Stop previous audio if playing
+    if (audioSourceRef.current) {
+      audioSourceRef.current.stop();
+    }
+
+    setAudioLoading(true);
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      }
+      
+      const base64Audio = await textToSpeech(outputText);
+      const audioBytes = decodeBase64(base64Audio);
+      const audioBuffer = await decodeAudioData(audioBytes, audioContextRef.current, 24000, 1);
+      
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContextRef.current.destination);
+      source.onended = () => setAudioLoading(false);
+      source.start();
+      audioSourceRef.current = source;
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '語音播放失敗');
+      setAudioLoading(false);
+    }
+  };
+
   const handleCopy = (text: string, id: string) => {
     if (!text) return;
     navigator.clipboard.writeText(text);
@@ -88,20 +156,25 @@ const App: React.FC = () => {
   };
 
   const CopyIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
     </svg>
   );
 
   const CheckIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
       <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+    </svg>
+  );
+
+  const SpeakerIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
     </svg>
   );
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
-      {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <div className="flex items-center gap-2">
@@ -128,12 +201,10 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
         {!showGuide ? (
           <>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full min-h-[500px]">
-              {/* Input Area */}
               <div className="flex flex-col gap-2">
                 <div className="flex justify-between items-center mb-1">
                   <label className="text-sm font-semibold text-slate-700">原文內容</label>
@@ -158,7 +229,6 @@ const App: React.FC = () => {
                 />
               </div>
 
-              {/* Desktop Control Buttons */}
               <div className="hidden lg:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 flex-col gap-4">
                 <button 
                     onClick={handleConvert}
@@ -187,19 +257,36 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              {/* Output Area */}
               <div className="flex flex-col gap-2">
                 <div className="flex justify-between items-center mb-1">
                   <label className="text-sm font-semibold text-slate-700">轉換結果</label>
-                  {outputText && (
-                    <button 
-                      onClick={() => handleCopy(outputText, 'output')} 
-                      className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 bg-indigo-50 px-3 py-1.5 rounded-full transition-all"
-                    >
-                      {copyStatus?.id === 'output' ? <CheckIcon /> : <CopyIcon />}
-                      {copyStatus?.id === 'output' ? '已複製' : '複製結果'}
-                    </button>
-                  )}
+                  <div className="flex gap-2">
+                    {outputText && (
+                      <>
+                        <button 
+                          onClick={handleSpeak}
+                          disabled={audioLoading}
+                          className={`text-xs font-bold flex items-center gap-1 px-3 py-1.5 rounded-full transition-all ${
+                            audioLoading ? 'bg-amber-100 text-amber-600' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                          }`}
+                        >
+                          {audioLoading ? (
+                            <svg className="animate-pulse h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                              <circle cx="10" cy="10" r="10" />
+                            </svg>
+                          ) : <SpeakerIcon />}
+                          {audioLoading ? '正在合成...' : '朗讀文字'}
+                        </button>
+                        <button 
+                          onClick={() => handleCopy(outputText, 'output')} 
+                          className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1 bg-indigo-50 px-3 py-1.5 rounded-full transition-all"
+                        >
+                          {copyStatus?.id === 'output' ? <CheckIcon /> : <CopyIcon />}
+                          {copyStatus?.id === 'output' ? '已複製' : '複製結果'}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
                 <div className="relative flex-1">
                   <textarea
@@ -220,7 +307,6 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* History Section */}
             {history.length > 0 && (
               <section className="mt-20">
                 <div className="flex justify-between items-end mb-8">
@@ -257,7 +343,6 @@ const App: React.FC = () => {
             )}
           </>
         ) : (
-          /* Deployment Guide Section */
           <div className="max-w-4xl mx-auto bg-white rounded-3xl shadow-xl overflow-hidden border border-slate-100 animate-in fade-in slide-in-from-bottom-4 duration-500">
              <div className="bg-indigo-600 p-8 text-white">
                 <h2 className="text-3xl font-bold serif mb-2">虛擬主機部署指南</h2>
@@ -287,12 +372,6 @@ const App: React.FC = () => {
                       <p className="text-indigo-400">// 在 services/geminiService.ts 中</p>
                       <p>const ai = new GoogleGenAI({`{ apiKey: '您的_API_KEY_字串' }`});</p>
                    </div>
-                   <p className="mt-4 text-sm text-amber-600 bg-amber-50 p-4 rounded-xl border border-amber-100 flex gap-2">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                      </svg>
-                      注意：前端暴露 API Key 有被濫用的風險。生產環境建議使用後端 Proxy (如 Vercel Functions 或 Node.js 中間層) 來保護您的 Key。
-                   </p>
                 </section>
 
                 <section>
@@ -320,12 +399,11 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Footer */}
       <footer className="bg-slate-900 text-slate-400 py-16 mt-20">
         <div className="max-w-7xl mx-auto px-4 text-center">
           <span className="text-white font-bold serif text-xl block mb-4 tracking-tight italic">HanziFlow AI</span>
           <p className="text-sm max-w-lg mx-auto mb-10 text-slate-500">
-            結合 Gemini 3 技術，提供上下文感知的簡繁轉換。無論是個人使用還是企業部署，HanziFlow 都是您的最佳夥伴。
+            結合 Gemini 3 技術，提供上下文感知的簡繁轉換與語義朗讀。
           </p>
           <div className="border-t border-slate-800 pt-10 text-[10px] tracking-widest uppercase font-bold">
             <p>© 2025 HanziFlow AI. 支援靜態託管與虛擬主機部署。</p>
